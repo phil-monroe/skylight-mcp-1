@@ -116,6 +116,51 @@ describe('chore tools', () => {
     expect(JSON.parse(out.content[0].text)).toHaveLength(1);
   });
 
+  it('list_chores passes status through as a query param and enforces it client-side', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({
+      data: [
+        { id: '1', type: 'chore', attributes: { summary: 'Pending one', status: 'pending' } },
+        { id: '2', type: 'chore', attributes: { summary: 'Complete one', status: 'complete' } },
+      ],
+    });
+    const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01', status: 'pending' });
+    expect(request).toHaveBeenCalledWith('GET', '/frames/3435252/chores', {
+      query: { after: '2026-05-01', before: '2026-06-01', filter: 'linked_to_profile', status: 'pending' },
+    });
+    const summaries = JSON.parse(out.content[0].text).map((c: any) => c.summary);
+    expect(summaries).toEqual(['Pending one']);
+  });
+
+  it('list_chores filters client-side to status=complete even if the API ignores the query param', async () => {
+    const { tools, request } = harness();
+    // Simulates the API not honoring status server-side - both chores come back regardless.
+    request.mockResolvedValue({
+      data: [
+        { id: '1', type: 'chore', attributes: { summary: 'Pending one', status: 'pending' } },
+        { id: '2', type: 'chore', attributes: { summary: 'Complete one', status: 'complete' } },
+      ],
+    });
+    const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01', status: 'complete' });
+    const summaries = JSON.parse(out.content[0].text).map((c: any) => c.summary);
+    expect(summaries).toEqual(['Complete one']);
+  });
+
+  it('list_chores omits the status query param and returns every status when status is omitted', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({
+      data: [
+        { id: '1', type: 'chore', attributes: { summary: 'Pending one', status: 'pending' } },
+        { id: '2', type: 'chore', attributes: { summary: 'Complete one', status: 'complete' } },
+      ],
+    });
+    const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01' });
+    expect(request).toHaveBeenCalledWith('GET', '/frames/3435252/chores', {
+      query: { after: '2026-05-01', before: '2026-06-01', filter: 'linked_to_profile' },
+    });
+    expect(JSON.parse(out.content[0].text)).toHaveLength(2);
+  });
+
   it('list_chores with explicit frameId uses it and skips resolveFrameId', async () => {
     const { tools, request, resolveFrameId } = harness();
     request.mockResolvedValue({ data: [] });

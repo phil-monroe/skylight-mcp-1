@@ -69,7 +69,7 @@ function isChoreInRange(chore: Record<string, unknown>, after: string, before: s
 export function registerChoreTools(server: McpServer, getClient: GetClient) {
   server.tool(
     'skylight_list_chores',
-    'List chores for a Skylight frame within a required date range, optionally scoped to one or more family members via `category_ids`. Each chore carries its assignee in `category_id` (a family-member category — resolve names via skylight_list_categories) and, for a completed up-for-grabs chore, who did it in `completed_category_id`. Either key is pluralised — `category_ids` / `completed_category_ids` — when the API links several members, so an absent singular key means unassigned, never multi-assigned. A completed one-off chore with no `start` is bounded by its `completed_on` date instead, correcting a raw-API quirk where such chores otherwise ignore `after`/`before` entirely.',
+    'List chores for a Skylight frame within a required date range, optionally scoped to one or more family members via `category_ids` and/or a single `status`. Each chore carries its assignee in `category_id` (a family-member category — resolve names via skylight_list_categories) and, for a completed up-for-grabs chore, who did it in `completed_category_id`. Either key is pluralised — `category_ids` / `completed_category_ids` — when the API links several members, so an absent singular key means unassigned, never multi-assigned. A completed one-off chore with no `start` is bounded by its `completed_on` date instead, correcting a raw-API quirk where such chores otherwise ignore `after`/`before` entirely.',
     {
       after: z.string().describe('YYYY-MM-DD inclusive lower bound (required by the API).'),
       before: z.string().describe('YYYY-MM-DD inclusive upper bound (required by the API).'),
@@ -95,20 +95,31 @@ export function registerChoreTools(server: McpServer, getClient: GetClient) {
       // caller asking about one person's chores gets back only their rows instead of the whole
       // frame's - meaningfully smaller when handing the result to an LLM.
       category_ids: idArrayParam.optional().describe('Only return chores assigned to one of these family-member category ids (skylight_list_categories / skylight_resolve_member). Matches a chore\'s category_id or, for a multi-member chore, any id in its category_ids. Omit to return chores for every member.'),
+      // GET /frames/{f}/chores' own status vocabulary is 'pending'/'complete' (see
+      // skylight_complete_chore/skylight_uncomplete_chore). Sent through as a query param too in
+      // case the API honors it server-side (untested - no confirmation either way), but always
+      // re-checked client-side below regardless, the same defensive stance as the date-range and
+      // category_ids filters above: don't trust an unverified server-side filter to be the only
+      // thing standing between a caller and the wrong data. The common case this exists for -
+      // "what's still outstanding" - only needs status: 'pending', which is also most of what
+      // reaches an LLM's context, so this is a meaningful size win on top of category_ids.
+      status: z.enum(['pending', 'complete']).optional().describe('Only return chores in this status. Omit to return both pending and completed chores.'),
       frameId: z.string().optional(),
     },
-    frameScoped(getClient, async (c, f, { after, before, include_linked_to_profile, category_ids }: { after: string; before: string; include_linked_to_profile?: boolean; category_ids?: (string | number)[]; frameId?: string }) => {
+    frameScoped(getClient, async (c, f, { after, before, include_linked_to_profile, category_ids, status }: { after: string; before: string; include_linked_to_profile?: boolean; category_ids?: (string | number)[]; status?: 'pending' | 'complete'; frameId?: string }) => {
       const query: Record<string, string> = { after, before };
       if (include_linked_to_profile ?? true) query.filter = 'linked_to_profile';
+      if (status) query.status = status;
       const doc = await c.request<ChoreDoc | undefined>('GET', `/frames/${f}/chores`, { query });
       if (!doc) return textContent([]);
       const chores = flattenChores(doc);
       if (!Array.isArray(chores)) return textContent(chores);
-      const inRange = chores.filter((chore) => isChoreInRange(chore, after, before));
-      if (!category_ids?.length) return textContent(inRange);
+      let filtered = chores.filter((chore) => isChoreInRange(chore, after, before));
+      if (status) filtered = filtered.filter((chore) => chore.status === status);
+      if (!category_ids?.length) return textContent(filtered);
       const wanted = new Set(category_ids.map(String));
       return textContent(
-        inRange.filter((chore) => {
+        filtered.filter((chore) => {
           const ids = (chore.category_ids as string[] | undefined) ?? (chore.category_id != null ? [chore.category_id as string] : []);
           return ids.some((id) => wanted.has(id));
         }),
