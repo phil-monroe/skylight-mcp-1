@@ -56,10 +56,26 @@ export function registerChoreTools(server: McpServer, getClient: GetClient) {
     {
       after: z.string().describe('YYYY-MM-DD inclusive lower bound (required by the API).'),
       before: z.string().describe('YYYY-MM-DD inclusive upper bound (required by the API).'),
+      // NOT YET LIVE-VERIFIED AGAINST THIS CLIENT - carried over from a documented finding against a
+      // since-abandoned wrapper of this same Skylight REST endpoint (rjhalvorson/skylight-mcp, this
+      // project's predecessor): without `filter=linked_to_profile`, GET /frames/{f}/chores never
+      // returned chores assigned to a family member who also has their own Skylight account (an
+      // adult/"linked to profile" category, as opposed to a plain chore-chart label) - an A/B/C test
+      // there found an identical request/response pair except for this one query param going from
+      // 1758 chores/3 categories to 2185 chores/6 categories, with the added 427 chores/3 categories
+      // being exactly the missing adults'. Reproduced independently here as a real symptom against
+      // this project's own skylight_list_chores (a 2-year-wide after/before range still returned
+      // zero chores for either adult profile in one household), but the specific fix (this query
+      // param) has NOT been confirmed to work against the live API through this codebase's own
+      // client - please verify against a real account with an adult profile before relying on this.
+      // Defaults on so a caller doesn't have to know this endpoint quirk exists at all.
+      include_linked_to_profile: z.boolean().optional().describe('Include chores assigned to a family member who has their own Skylight account (not just a chore-chart label) - the API silently omits these unless asked. Defaults to true; set false only if you\'ve confirmed this frame has no such members and want to skip the extra filter.'),
       frameId: z.string().optional(),
     },
-    frameScoped(getClient, async (c, f, { after, before }: { after: string; before: string; frameId?: string }) => {
-      const doc = await c.request<ChoreDoc | undefined>('GET', `/frames/${f}/chores`, { query: { after, before } });
+    frameScoped(getClient, async (c, f, { after, before, include_linked_to_profile }: { after: string; before: string; include_linked_to_profile?: boolean; frameId?: string }) => {
+      const query: Record<string, string> = { after, before };
+      if (include_linked_to_profile ?? true) query.filter = 'linked_to_profile';
+      const doc = await c.request<ChoreDoc | undefined>('GET', `/frames/${f}/chores`, { query });
       return doc ? textContent(flattenChores(doc)) : textContent([]);
     }),
   );

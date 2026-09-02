@@ -26,14 +26,23 @@ afterEach(() => {
 describe('chore tools', () => {
   // ── skylight_list_chores ─────────────────────────────────────────────────
 
-  it('list_chores passes required after/before query params', async () => {
+  it('list_chores passes required after/before query params, plus filter=linked_to_profile by default', async () => {
     const { tools, request } = harness();
     request.mockResolvedValue({ data: [{ id: '1', type: 'chore', attributes: { name: 'Dishes' } }] });
     const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01' });
     expect(request).toHaveBeenCalledWith('GET', '/frames/3435252/chores', {
-      query: { after: '2026-05-01', before: '2026-06-01' },
+      query: { after: '2026-05-01', before: '2026-06-01', filter: 'linked_to_profile' },
     });
     expect(JSON.parse(out.content[0].text)).toEqual([{ id: '1', type: 'chore', name: 'Dishes' }]);
+  });
+
+  it('list_chores omits filter=linked_to_profile when include_linked_to_profile is false', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({ data: [] });
+    await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01', include_linked_to_profile: false });
+    expect(request).toHaveBeenCalledWith('GET', '/frames/3435252/chores', {
+      query: { after: '2026-05-01', before: '2026-06-01' },
+    });
   });
 
   it('list_chores with explicit frameId uses it and skips resolveFrameId', async () => {
@@ -41,7 +50,7 @@ describe('chore tools', () => {
     request.mockResolvedValue({ data: [] });
     await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01', frameId: '99' });
     expect(request).toHaveBeenCalledWith('GET', '/frames/99/chores', {
-      query: { after: '2026-05-01', before: '2026-06-01' },
+      query: { after: '2026-05-01', before: '2026-06-01', filter: 'linked_to_profile' },
     });
     expect(resolveFrameId).not.toHaveBeenCalled();
   });
