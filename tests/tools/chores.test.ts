@@ -45,6 +45,46 @@ describe('chore tools', () => {
     });
   });
 
+  it('list_chores filters to the requested category_ids, matching either category_id or category_ids', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({
+      data: [
+        { id: '1', type: 'chore', attributes: { summary: 'Ella chore' }, relationships: { category: { data: { id: '10', type: 'category' } } } },
+        { id: '2', type: 'chore', attributes: { summary: 'Maggie chore' }, relationships: { category: { data: { id: '20', type: 'category' } } } },
+        { id: '3', type: 'chore', attributes: { summary: 'Shared chore' }, relationships: { category: { data: [{ id: '10', type: 'category' }, { id: '30', type: 'category' }] } } },
+      ],
+    });
+    const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01', category_ids: ['10'] });
+    // The request itself is unfiltered - Skylight has no server-side param for this.
+    expect(request).toHaveBeenCalledWith('GET', '/frames/3435252/chores', {
+      query: { after: '2026-05-01', before: '2026-06-01', filter: 'linked_to_profile' },
+    });
+    expect(JSON.parse(out.content[0].text)).toEqual([
+      { id: '1', type: 'chore', summary: 'Ella chore', category_id: '10' },
+      { id: '3', type: 'chore', summary: 'Shared chore', category_ids: ['10', '30'] },
+    ]);
+  });
+
+  it('list_chores accepts a numeric category_ids entry and matches it against a stringified category_id', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({
+      data: [{ id: '1', type: 'chore', attributes: { summary: 'Ella chore' }, relationships: { category: { data: { id: 10, type: 'category' } } } }],
+    });
+    const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01', category_ids: [10] });
+    expect(JSON.parse(out.content[0].text)).toEqual([{ id: '1', type: 'chore', summary: 'Ella chore', category_id: '10' }]);
+  });
+
+  it('list_chores returns every chore when category_ids is omitted or empty', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({
+      data: [{ id: '1', type: 'chore', attributes: { summary: 'Ella chore' }, relationships: { category: { data: { id: '10', type: 'category' } } } }],
+    });
+    const outOmitted = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01' });
+    expect(JSON.parse(outOmitted.content[0].text)).toHaveLength(1);
+    const outEmpty = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01', category_ids: [] });
+    expect(JSON.parse(outEmpty.content[0].text)).toHaveLength(1);
+  });
+
   it('list_chores with explicit frameId uses it and skips resolveFrameId', async () => {
     const { tools, request, resolveFrameId } = harness();
     request.mockResolvedValue({ data: [] });

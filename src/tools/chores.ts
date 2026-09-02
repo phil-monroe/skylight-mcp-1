@@ -52,7 +52,7 @@ function flattenChores(doc: ChoreDoc): unknown {
 export function registerChoreTools(server: McpServer, getClient: GetClient) {
   server.tool(
     'skylight_list_chores',
-    'List chores for a Skylight frame within a required date range. Each chore carries its assignee in `category_id` (a family-member category — resolve names via skylight_list_categories) and, for a completed up-for-grabs chore, who did it in `completed_category_id`. Either key is pluralised — `category_ids` / `completed_category_ids` — when the API links several members, so an absent singular key means unassigned, never multi-assigned.',
+    'List chores for a Skylight frame within a required date range, optionally scoped to one or more family members via `category_ids`. Each chore carries its assignee in `category_id` (a family-member category — resolve names via skylight_list_categories) and, for a completed up-for-grabs chore, who did it in `completed_category_id`. Either key is pluralised — `category_ids` / `completed_category_ids` — when the API links several members, so an absent singular key means unassigned, never multi-assigned.',
     {
       after: z.string().describe('YYYY-MM-DD inclusive lower bound (required by the API).'),
       before: z.string().describe('YYYY-MM-DD inclusive upper bound (required by the API).'),
@@ -70,13 +70,30 @@ export function registerChoreTools(server: McpServer, getClient: GetClient) {
       // client - please verify against a real account with an adult profile before relying on this.
       // Defaults on so a caller doesn't have to know this endpoint quirk exists at all.
       include_linked_to_profile: z.boolean().optional().describe('Include chores assigned to a family member who has their own Skylight account (not just a chore-chart label) - the API silently omits these unless asked. Defaults to true; set false only if you\'ve confirmed this frame has no such members and want to skip the extra filter.'),
+      // The API has no server-side way to scope this endpoint to one person - GET
+      // /frames/{f}/chores only ever accepts after/before (confirmed against the mobile app's own
+      // traffic in docs/MOBILE_API_FINDINGS.md, which shows no category/assignee param on this
+      // route). Every chore in the date range is fetched either way; this filters the response
+      // client-side by the same category_id/category_ids flattenChore() already inlines, so a
+      // caller asking about one person's chores gets back only their rows instead of the whole
+      // frame's - meaningfully smaller when handing the result to an LLM.
+      category_ids: idArrayParam.optional().describe('Only return chores assigned to one of these family-member category ids (skylight_list_categories / skylight_resolve_member). Matches a chore\'s category_id or, for a multi-member chore, any id in its category_ids. Omit to return chores for every member.'),
       frameId: z.string().optional(),
     },
-    frameScoped(getClient, async (c, f, { after, before, include_linked_to_profile }: { after: string; before: string; include_linked_to_profile?: boolean; frameId?: string }) => {
+    frameScoped(getClient, async (c, f, { after, before, include_linked_to_profile, category_ids }: { after: string; before: string; include_linked_to_profile?: boolean; category_ids?: (string | number)[]; frameId?: string }) => {
       const query: Record<string, string> = { after, before };
       if (include_linked_to_profile ?? true) query.filter = 'linked_to_profile';
       const doc = await c.request<ChoreDoc | undefined>('GET', `/frames/${f}/chores`, { query });
-      return doc ? textContent(flattenChores(doc)) : textContent([]);
+      if (!doc) return textContent([]);
+      const chores = flattenChores(doc);
+      if (!category_ids?.length || !Array.isArray(chores)) return textContent(chores);
+      const wanted = new Set(category_ids.map(String));
+      return textContent(
+        chores.filter((chore) => {
+          const ids = (chore.category_ids as string[] | undefined) ?? (chore.category_id != null ? [chore.category_id as string] : []);
+          return ids.some((id) => wanted.has(id));
+        }),
+      );
     }),
   );
 
