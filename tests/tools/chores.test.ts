@@ -85,6 +85,37 @@ describe('chore tools', () => {
     expect(JSON.parse(outEmpty.content[0].text)).toHaveLength(1);
   });
 
+  it('list_chores drops a completed null-start chore whose completed_on falls outside the range', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({
+      data: [
+        { id: '1', type: 'chore', attributes: { summary: 'In range', status: 'complete', start: null, completed_on: '2026-05-15' } },
+        { id: '2', type: 'chore', attributes: { summary: 'Out of range', status: 'complete', start: null, completed_on: '2025-08-03' } },
+      ],
+    });
+    const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01' });
+    const summaries = JSON.parse(out.content[0].text).map((c: any) => c.summary);
+    expect(summaries).toEqual(['In range']);
+  });
+
+  it('list_chores keeps a chore with a start date even if that date is outside after/before (server already bounds it)', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({
+      data: [{ id: '1', type: 'chore', attributes: { summary: 'Server-bounded', status: 'pending', start: '2099-01-01' } }],
+    });
+    const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01' });
+    expect(JSON.parse(out.content[0].text)).toHaveLength(1);
+  });
+
+  it('list_chores keeps a null-start chore with no completed_on (e.g. still pending) regardless of range', async () => {
+    const { tools, request } = harness();
+    request.mockResolvedValue({
+      data: [{ id: '1', type: 'chore', attributes: { summary: 'Undated to-do', status: 'pending', start: null } }],
+    });
+    const out = await tools.skylight_list_chores({ after: '2026-05-01', before: '2026-06-01' });
+    expect(JSON.parse(out.content[0].text)).toHaveLength(1);
+  });
+
   it('list_chores with explicit frameId uses it and skips resolveFrameId', async () => {
     const { tools, request, resolveFrameId } = harness();
     request.mockResolvedValue({ data: [] });

@@ -49,10 +49,27 @@ function flattenChores(doc: ChoreDoc): unknown {
   return rows.map(flattenChore);
 }
 
+/**
+ * LIVE-VERIFIED bug in the raw API, not this tool: a chore with no `start` (an unscheduled
+ * one-off - 12 of them in one real household, all but one already `complete`) is NEVER bounded
+ * by `after`/`before` server-side. A single-day `after`/`before` query still returned every one
+ * of them, several with a `completed_on` over a year outside the requested range; every chore
+ * WITH a `start` was correctly bounded in the same test (0 leaked). `completed_on` is the only
+ * date a completed one-off actually carries, so that's what gets checked here instead. A still-
+ * PENDING null-start chore (the one exception in that household) has no date field to bound it
+ * by at all - left alone rather than guessing, same as it behaved before this filter existed.
+ */
+function isChoreInRange(chore: Record<string, unknown>, after: string, before: string): boolean {
+  if (chore.start != null) return true;
+  const completedOn = chore.completed_on as string | null | undefined;
+  if (chore.status === 'complete' && completedOn != null) return completedOn >= after && completedOn <= before;
+  return true;
+}
+
 export function registerChoreTools(server: McpServer, getClient: GetClient) {
   server.tool(
     'skylight_list_chores',
-    'List chores for a Skylight frame within a required date range, optionally scoped to one or more family members via `category_ids`. Each chore carries its assignee in `category_id` (a family-member category — resolve names via skylight_list_categories) and, for a completed up-for-grabs chore, who did it in `completed_category_id`. Either key is pluralised — `category_ids` / `completed_category_ids` — when the API links several members, so an absent singular key means unassigned, never multi-assigned.',
+    'List chores for a Skylight frame within a required date range, optionally scoped to one or more family members via `category_ids`. Each chore carries its assignee in `category_id` (a family-member category — resolve names via skylight_list_categories) and, for a completed up-for-grabs chore, who did it in `completed_category_id`. Either key is pluralised — `category_ids` / `completed_category_ids` — when the API links several members, so an absent singular key means unassigned, never multi-assigned. A completed one-off chore with no `start` is bounded by its `completed_on` date instead, correcting a raw-API quirk where such chores otherwise ignore `after`/`before` entirely.',
     {
       after: z.string().describe('YYYY-MM-DD inclusive lower bound (required by the API).'),
       before: z.string().describe('YYYY-MM-DD inclusive upper bound (required by the API).'),
@@ -86,10 +103,12 @@ export function registerChoreTools(server: McpServer, getClient: GetClient) {
       const doc = await c.request<ChoreDoc | undefined>('GET', `/frames/${f}/chores`, { query });
       if (!doc) return textContent([]);
       const chores = flattenChores(doc);
-      if (!category_ids?.length || !Array.isArray(chores)) return textContent(chores);
+      if (!Array.isArray(chores)) return textContent(chores);
+      const inRange = chores.filter((chore) => isChoreInRange(chore, after, before));
+      if (!category_ids?.length) return textContent(inRange);
       const wanted = new Set(category_ids.map(String));
       return textContent(
-        chores.filter((chore) => {
+        inRange.filter((chore) => {
           const ids = (chore.category_ids as string[] | undefined) ?? (chore.category_id != null ? [chore.category_id as string] : []);
           return ids.some((id) => wanted.has(id));
         }),
